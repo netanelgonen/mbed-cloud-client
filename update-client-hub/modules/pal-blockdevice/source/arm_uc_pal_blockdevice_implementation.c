@@ -69,6 +69,15 @@ static uint32_t pal_blockdevice_page_size = 0;
 static uint32_t pal_blockdevice_sector_size = 0;
 static uint32_t pal_blockdevice_hdr_size = 0;
 
+
+
+#ifdef 	MBED_SECURE_BOOTLOADER_ENABLE
+	extern const uint8_t arm_uc_default_certificate[];
+	extern const uint8_t arm_uc_default_certificate_size;
+	static uint32_t pal_blockdevice_secure_boot_hdr_size = 0;
+#endif
+
+
 static void pal_blockdevice_signal_internal(uint32_t event)
 {
     if (pal_blockdevice_event_handler) {
@@ -185,7 +194,9 @@ arm_uc_error_t ARM_UC_PAL_BlockDevice_Initialize(ARM_UC_PAAL_UPDATE_SignalEvent_
         pal_blockdevice_page_size  = arm_uc_blockdevice_get_program_size();
         pal_blockdevice_sector_size = arm_uc_blockdevice_get_erase_size();
         pal_blockdevice_hdr_size   = pal_blockdevice_round_up_to_page(ARM_UC_EXTERNAL_HEADER_SIZE_V2);
-
+#ifdef MBED_SECURE_BOOTLOADER_ENABLE
+        pal_blockdevice_secure_boot_hdr_size = pal_blockdevice_round_up_to_page(ARM_UC_EXTERNAL_SECURE_BOOTLOADER_HEADER_SIZE_V1);
+#endif
         if (status == ARM_UC_BLOCKDEVICE_SUCCESS) {
             pal_blockdevice_event_handler = callback;
             pal_blockdevice_signal_internal(ARM_UC_PAAL_EVENT_INITIALIZE_DONE);
@@ -205,6 +216,19 @@ uint32_t ARM_UC_PAL_BlockDevice_GetMaxID(void)
 {
     return MBED_CONF_UPDATE_CLIENT_STORAGE_LOCATIONS;
 }
+#include "mbedtls/x509_crt.h"
+
+
+static uint32_t ARM_UC_blockDevice_find_uint_mpi_in_stream(mbedtls_mpi_uint *data, uint8_t *stream, uint32_t stream_size)
+{
+	uint32_t location = 0;
+	for(; location< stream_size; location++)
+	{
+		if(!memcmp(data, &stream[location], sizeof(data)))
+				break;
+	}
+	return location;
+}
 
 /**
  * @brief Prepare the storage layer for a new firmware image.
@@ -223,7 +247,11 @@ arm_uc_error_t ARM_UC_PAL_BlockDevice_Prepare(uint32_t slot_id,
                                               arm_uc_buffer_t *buffer)
 {
     arm_uc_error_t result = { .code = ERR_INVALID_PARAMETER };
-
+#ifdef MBED_SECURE_BOOTLOADER_ENABLE
+    Application_manifest_t secure_boot_hdr_place_holder;
+    memset(&secure_boot_hdr_place_holder, 0 ,sizeof(secure_boot_hdr_place_holder));
+#endif
+    printf("ARM_UC_PAL_BlockDevice_Prepare ARM_UC_PAL_BlockDevice_Prepare ARM_UC_PAL_BlockDevice_Prepare ARM_UC_PAL_BlockDevice_Prepare ARM_UC_PAL_BlockDevice_Prepare\r\n");
     if (details && buffer && buffer->ptr) {
         UC_PAAL_TRACE("ARM_UC_PAL_BlockDevice_Prepare: %" PRIX32 " %" PRIX32,
                       slot_id, details->size);
@@ -233,16 +261,21 @@ arm_uc_error_t ARM_UC_PAL_BlockDevice_Prepare(uint32_t slot_id,
                                                                         buffer);
         if (header_status.error == ERR_NONE) {
             /* find the size needed to erase. Header is stored contiguous with firmware */
+#ifdef MBED_SECURE_BOOTLOADER_ENABLE
+            uint32_t erase_size = pal_blockdevice_round_up_to_sector(pal_blockdevice_hdr_size + \
+                                                                     pal_blockdevice_secure_boot_hdr_size + \
+                                                                     details->size);
+#else
             uint32_t erase_size = pal_blockdevice_round_up_to_sector(pal_blockdevice_hdr_size + \
                                                                      details->size);
-
+#endif
             /* find address of slot */
             uint32_t slot_addr = ARM_UC_BLOCKDEVICE_INVALID_SIZE;
             uint32_t slot_size = ARM_UC_BLOCKDEVICE_INVALID_SIZE;
             result = pal_blockdevice_get_slot_addr_size(slot_id, &slot_addr, &slot_size);
 
             UC_PAAL_TRACE("erase: %" PRIX32 " %" PRIX32 " %" PRIX32, slot_addr, erase_size, slot_size);
-
+            int secure_status = ARM_UC_BLOCKDEVICE_FAIL;
             int status = ARM_UC_BLOCKDEVICE_FAIL;
             if (result.error == ERR_NONE) {
                 if (erase_size <= slot_size) {
@@ -255,12 +288,57 @@ arm_uc_error_t ARM_UC_PAL_BlockDevice_Prepare(uint32_t slot_id,
             }
 
             if (status == ARM_UC_BLOCKDEVICE_SUCCESS) {
+            	//application data to header
+#ifdef MBED_SECURE_BOOTLOADER_ENABLE
+            	secure_boot_hdr_place_holder.applicationSize = details->size;
+
+            	secure_boot_hdr_place_holder.applicationStartAddress = MBED_CONF_UPDATE_CLIENT_APPLICATION_DETAILS;
+
+
+            	//certificate date to header
+            	secure_boot_hdr_place_holder.certificateAddress = arm_uc_default_certificate;
+
+                mbedtls_x509_crt crt;
+                mbedtls_x509_crt_init(&crt);
+                int rc = mbedtls_x509_crt_parse_der(&crt, arm_uc_default_certificate, arm_uc_default_certificate_size);
+
+
+
+                if (!rc)
+                {
+                	UC_PAAL_ERR_MSG("arm_uc_blockdevice_erase failed");
+                	return ARM_UC_BLOCKDEVICE_FAIL;
+                }
+                mbedtls_ecp_keypair *pk_ec_ctx = mbedtls_pk_ec( crt.pk );
+                mbedtls_mpi_uint byte_to_search = pk_ec_ctx->Q.X.p[pk_ec_ctx->Q.X.n-1];
+
+                secure_boot_hdr_place_holder.publicKeyOffset = ARM_UC_blockDevice_find_uint_mpi_in_stream(&byte_to_search,
+                		arm_uc_default_certificate, arm_uc_default_certificate_size) - 1;
+
+                byte_to_search = pk_ec_ctx->Q.Y.p[0];
+                // total size is the location of last byte of the key (represented in the 1st mpi of Y) - the start offset
+                secure_boot_hdr_place_holder.publicKeySize = ARM_UC_blockDevice_find_uint_mpi_in_stream(&byte_to_search,
+                		arm_uc_default_certificate, arm_uc_default_certificate_size) - secure_boot_hdr_place_holder.publicKeyOffset;
+
+
+                // manifest data to header
+
+            	secure_status  = arm_uc_blockdevice_program(&secure_boot_hdr_place_holder,
+                                                    slot_addr,
+													pal_blockdevice_secure_boot_hdr_size);
+                /* write header */
+                status = arm_uc_blockdevice_program(buffer->ptr,
+                                                    slot_addr + pal_blockdevice_secure_boot_hdr_size,
+                                                    pal_blockdevice_hdr_size);
+#else
                 /* write header */
                 status = arm_uc_blockdevice_program(buffer->ptr,
                                                     slot_addr,
                                                     pal_blockdevice_hdr_size);
+#endif
 
-                if (status == ARM_UC_BLOCKDEVICE_SUCCESS) {
+
+                if ((status == ARM_UC_BLOCKDEVICE_SUCCESS) && (secure_status == ARM_UC_BLOCKDEVICE_SUCCESS)) {
                     /* set return code */
                     result.code = ERR_NONE;
 

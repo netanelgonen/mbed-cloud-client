@@ -276,8 +276,29 @@ static arm_uc_error_t state_begin(struct arm_uc_mmInsertContext_t *ctx, uint32_t
  */
 static arm_uc_error_t state_verifyBasicParameters(struct arm_uc_mmInsertContext_t *ctx, uint32_t *event)
 {
+	printf("state_verifyBasicParameters state_verifyBasicParameters state_verifyBasicParameters state_verifyBasicParameters\r\n");
     arm_uc_error_t err = {MFST_ERR_NONE};
-
+    uint32_t manifest_signed_data_size = 0;
+    uint32_t manifest_signed_data_offset = 0;
+    uint32_t manifest_index = 1;
+    if (ctx->manifest.ptr[manifest_index] == 0x81)
+    {
+    	manifest_index += 3;
+    }
+    else
+    {
+    	manifest_index += 4;
+    }
+    if (ctx->manifest.ptr[manifest_index] == 0x81)
+    {
+    	manifest_signed_data_size = ctx->manifest.ptr[manifest_index + 1];
+    }
+    else
+    {
+    	manifest_signed_data_size = (ctx->manifest.ptr[manifest_index + 1] +  (ctx->manifest.ptr[manifest_index + 2] * 0xFF));
+    }
+    manifest_signed_data_size += 3;
+    manifest_signed_data_offset = manifest_signed_data_size-1;
     if (err.error == ERR_NONE) {
         err = validateResourceType(&ctx->manifest);
     }

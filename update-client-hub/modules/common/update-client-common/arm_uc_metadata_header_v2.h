@@ -51,6 +51,26 @@ extern "C" {
 
 #define ARM_UC_EXTERNAL_HEADER_SIZE_V2 (296)
 
+#ifdef MBED_SECURE_BOOTLOADER_ENABLE
+	typedef struct _Application_manifest
+	{
+		uint32_t applicationSize;
+		uint32_t manifestSignatureOffset;
+		uint32_t manifestSignatureSize;
+		uint32_t manifestSignedDataOffset;
+		uint32_t manifestSignedDataSize;
+		uint32_t applicationHashOffset;
+		uint32_t locationOfManifest;
+		uint32_t applicationStartAddress;
+		uint32_t certificateAddress;
+		uint32_t publicKeyOffset;
+		uint32_t publicKeySize;
+	}__attribute__((packed)) Application_manifest_t;
+
+	#define ARM_UC_EXTERNAL_SECURE_BOOTLOADER_HEADER_SIZE_V1 sizeof(Application_manifest_t)
+
+#endif
+
 typedef struct _arm_uc_internal_header_t {
     /* Metadata-header specific magic code */
     uint32_t headerMagic;

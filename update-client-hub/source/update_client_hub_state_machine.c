@@ -727,6 +727,10 @@ void ARM_UC_HUB_setState(arm_uc_hub_state_t new_state)
                 ARM_UC_FirmwareManager.Activate(arm_uc_hub_firmware_config.package_id);
                 break;
 
+            case ARM_UC_HUB_STATE_CREATE_BOOT_HEADER:
+            	UC_HUB_TRACE("ARM_UC_HUB_STATE_CREATE_BOOT_HEADER");
+            	break;
+
             case ARM_UC_HUB_STATE_PREP_REBOOT:
                 UC_HUB_TRACE("ARM_UC_HUB_STATE_PREP_REBOOT");
 
